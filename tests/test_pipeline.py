@@ -108,8 +108,81 @@ def test_physics_shape():
           f"{meta['VertexCount']} vertices)")
 
 
+
+
+def test_keyform_grid_order():
+    """Cubism reads the keyform grid with the FIRST bound axis varying FASTEST.
+
+    Encodes each cell index into vertex positions and reads them back through
+    the runtime. When this was row-major (itertools.product's natural order)
+    the model still loaded, still deformed, and simply moved wrong -- every
+    multi-parameter mesh read a transposed grid.
+    """
+    import ctypes  # noqa: F401  (load_core needs a working ctypes)
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        from render_model import Model, load_core
+    except SystemExit as e:
+        print(f"skip: grid order ({e})")
+        return
+
+    from autorig.build import ArtMeshSpec, RigBuilder
+    from autorig.mesh import Mesh
+
+    verts = np.array([[-1, -1], [1, -1], [1, 1], [-1, 1]], np.float32)
+    mesh = Mesh(verts=verts,
+                uvs=np.array([[0, 0], [1, 0], [1, 1], [0, 1]], np.float32),
+                indices=np.array([0, 1, 2, 0, 2, 3], np.uint16))
+    rb = RigBuilder(100, 100, 1.0)
+    pa = rb.add_param("ParamA", 0, 2, 0, [0.0, 1.0, 2.0])
+    pb = rb.add_param("ParamB", 0, 1, 0, [0.0, 1.0])
+    rb.add_part("Root")
+    rb.add_mesh(ArtMeshSpec(
+        name="Q", mesh=mesh, part_index=0, bound_params=[pa, pb],
+        deform=lambda c: verts.astype(np.float64) + [c[0] * 10 + c[1] * 100, 0]))
+
+    tmp = ROOT / "build" / "_gridorder.moc3"
+    tmp.parent.mkdir(exist_ok=True)
+    rb.build().to_file(tmp)
+
+    m = Model(load_core(), tmp)
+    for a in (0.0, 1.0, 2.0):
+        for b in (0.0, 1.0):
+            m.set_param("ParamA", a)
+            m.set_param("ParamB", b)
+            m.update()
+            x = list(m.drawables())[0]["verts"][0][0]
+            want = a * 10 + b * 100 - 1
+            assert abs(x - want) < 0.01, \
+                f"grid transposed: A={a} B={b} gave {x:.1f}, expected {want:.1f}"
+    tmp.unlink()
+    print("ok: keyform grid order (first axis fastest)")
+
+
+def test_render_order_distinct():
+    """self_group_idx must be -1, or the runtime reports render order 0 for
+    every drawable and layers composite in arbitrary order."""
+    if not OUT.exists():
+        print("skip: render order (no out/Aka)")
+        return
+    sys.path.insert(0, str(ROOT / "tools"))
+    try:
+        from render_model import Model, load_core
+    except SystemExit as e:
+        print(f"skip: render order ({e})")
+        return
+
+    m = Model(load_core(), OUT / "Aka.moc3")
+    orders = [d["order"] for d in m.drawables()]
+    assert len(set(orders)) == len(orders), \
+        f"only {len(set(orders))} distinct render orders for {len(orders)} drawables"
+    print(f"ok: {len(orders)} drawables have distinct render order")
+
+
 if __name__ == "__main__":
     test_manifest_shape()
     test_physics_shape()
     test_uv_atlas_agreement()
+    test_keyform_grid_order()
+    test_render_order_distinct()
     print("\nall checks passed")

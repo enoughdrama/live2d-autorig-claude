@@ -191,10 +191,20 @@ class RigBuilder:
             am_kf_off.append(len(am_key_pos_off))
             am_key_len.append(n_cells)
 
-            # itertools.product varies the LAST axis fastest, which is exactly
-            # row-major with the first bound table slowest -- the order Cubism
-            # expects. Do not reorder.
-            cells = itertools.product(*[range(g) for g in grid]) if grid else [()]
+            # Cubism stores the keyform grid with the FIRST bound table varying
+            # FASTEST -- column-major, not row-major. itertools.product varies
+            # the last axis fastest, so the axes are reversed before iterating
+            # and each cell is flipped back to caller order.
+            #
+            # Verified empirically: a 3x2 grid encoding cell indices into vertex
+            # positions read back transposed until this was flipped (A=1,B=0
+            # returned the value written at A=0,B=1). Getting this wrong is
+            # silent -- the model loads, deforms, and simply moves wrongly.
+            if grid:
+                cells = (tuple(reversed(c))
+                         for c in itertools.product(*[range(g) for g in reversed(grid)]))
+            else:
+                cells = [()]
             for cell in cells:
                 pos = None
                 if spec.deform is not None:
@@ -257,12 +267,23 @@ class RigBuilder:
         # ---- draw order groups ----
         # A single flat group listing every mesh. Cubism supports nested groups
         # per part; one group is valid and keeps draw order fully explicit.
+        # Draw order is carried by the ORDER of entries in obj_idx, sorted by
+        # each mesh's draw_order value -- not by the value alone.
+        #
+        # self_group_idx must be -1 ("not a nested group"). Writing 0 points
+        # every item at group 0, i.e. the group containing it, and the runtime
+        # responds by reporting render order 0 for every drawable: layers then
+        # composite in arbitrary order. Verified against Mark, which uses -1.
+        order = sorted(range(n_meshes), key=lambda i: self.meshes[i].draw_order)
+        orders = [float(s.draw_order) for s in self.meshes]
         S["draw_group_src.obj_off"] = [0]
         S["draw_group_src.obj_len"] = [n_meshes]
-        S["draw_group_src.max_draw_order"] = [n_meshes]
+        S["draw_group_src.obj_total_count"] = [n_meshes]
+        S["draw_group_src.max_order"] = [int(max(orders))] if orders else [0]
+        S["draw_group_src.min_order"] = [int(min(orders))] if orders else [0]
         S["draw_group_obj_src.type"] = [0] * n_meshes        # 0 = art mesh
-        S["draw_group_obj_src.idx"] = list(range(n_meshes))
-        S["draw_group_obj_src.self_group_idx"] = [0] * n_meshes
+        S["draw_group_obj_src.idx"] = order
+        S["draw_group_obj_src.self_group_idx"] = [-1] * n_meshes
 
         # ---- counts ----
         m.set_count("parts", n_parts)

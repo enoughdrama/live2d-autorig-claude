@@ -97,9 +97,24 @@ python3 tests/test_pipeline.py   # UV/atlas agreement, manifest, physics counts
 Debugging a broken rig on top of a broken writer wastes hours.
 
 `exercise` exists because **a rig that loads but does not move** is the failure
-mode `consistency=1` hides. It caught two real bugs here that no structural
-check could: right-side parts resolving to left-side parameters, and a declared
-parameter that was never bound.
+mode `consistency=1` hides. It caught right-side parts resolving to left-side
+parameters, and a declared parameter that was never bound.
+
+Rendering caught two more that even `exercise` cannot see, because both produce
+motion -- just wrong motion:
+
+- the keyform grid is **column-major** (first bound axis varies fastest), so a
+  row-major write transposes every multi-parameter mesh
+- `self_group_idx` must be `-1`; writing `0` collapses every drawable to render
+  order 0 and layers composite arbitrarily
+
+```bash
+python3 tools/render_model.py out/Aka --out render.png
+python3 tools/render_model.py out/Aka --param ParamAngleX=30 ParamEyeLOpen=0
+```
+
+That tool drives Cubism Core through ctypes and rasterises the runtime's own
+deformation output, so what you see is what a real renderer would draw.
 
 The last check is a human loading it in VTube Studio. Nothing automated can
 tell you the motion looks *right*.

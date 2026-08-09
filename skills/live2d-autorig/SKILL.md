@@ -116,11 +116,21 @@ Verified: `EyeL4` binds tables [5,6] and has `key_len=9`. `Hair2` binds nothing
 and has `key_len=1`. Getting this product wrong is the single most common way to
 produce a file the oracle rejects.
 
-Grid order is row-major over the bound tables, first table varying slowest.
+**Grid order is column-major: the FIRST bound table varies FASTEST.** This is
+the opposite of `itertools.product`'s natural order and of what "row-major"
+suggests. Getting it backwards is completely silent -- the model loads,
+validates, and deforms, it just moves wrong, because every multi-parameter mesh
+reads a transposed grid. Locked by `test_keyform_grid_order`, which encodes cell
+indices into vertex positions and reads them back through the runtime.
 
 ### Deformables
 
 Three kinds, each with `binding_idx`, `keyform_off`, `key_len`:
+
+Draw order lives in `draw_group_obj_src`, and `self_group_idx` must be **-1**
+("not a nested group"). Writing 0 points every item at the group that contains
+it; the runtime then reports render order 0 for every drawable and layers
+composite in arbitrary order. Locked by `test_render_order_distinct`.
 
 - **art_mesh** — a drawable. `vertex_count`, `uv_off`, `idx_off/len`,
   `texture_no`, `parent_part_idx`, `parent_deformer_idx`.

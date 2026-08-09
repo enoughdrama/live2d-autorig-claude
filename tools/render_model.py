@@ -72,7 +72,7 @@ def load_core() -> C.CDLL:
     lib.csmGetParameterIds.argtypes = [C.c_void_p]
     lib.csmGetDrawableIds.restype = C.POINTER(C.c_char_p)
     lib.csmGetDrawableIds.argtypes = [C.c_void_p]
-    lib.csmGetCanvasInfo.argtypes = [C.c_void_p, C.POINTER(Vec2),
+    lib.csmReadCanvasInfo.argtypes = [C.c_void_p, C.POINTER(Vec2),
                                      C.POINTER(Vec2), C.POINTER(C.c_float)]
     return lib
 
@@ -81,12 +81,17 @@ class Model:
     def __init__(self, lib: C.CDLL, moc_path: Path):
         self.lib = lib
         raw = moc_path.read_bytes()
-        # csmReviveMocInPlace needs 64-byte alignment; over-allocate and offset.
-        self._buf = C.create_string_buffer(len(raw) + 64)
-        addr = C.addressof(self._buf)
-        self._moc_off = (-addr) % 64
-        C.memmove(addr + self._moc_off, raw, len(raw))
-        moc_ptr = addr + self._moc_off
+        # csmReviveMocInPlace needs the moc at a 64-byte boundary and writes
+        # back into that memory, so the buffer must stay alive and aligned for
+        # the model's whole lifetime. numpy arrays give a stable base address;
+        # ctypes string buffers are only guaranteed 8-byte aligned, which
+        # crashed with SIGBUS on roughly half of all runs depending on where
+        # the allocator happened to land.
+        self._buf = np.zeros(len(raw) + 64, dtype=np.uint8)
+        base = self._buf.ctypes.data
+        self._moc_off = (-base) % 64
+        self._buf[self._moc_off:self._moc_off + len(raw)] = np.frombuffer(raw, np.uint8)
+        moc_ptr = base + self._moc_off
 
         if not lib.csmHasMocConsistency(moc_ptr, len(raw)):
             raise SystemExit("moc3 failed csmHasMocConsistency")
@@ -95,9 +100,14 @@ class Model:
         if not self.moc:
             raise SystemExit("csmReviveMocInPlace failed")
 
+        # The model block needs 256-byte alignment AND `size` usable bytes past
+        # that aligned address. Allocating exactly size+256 and then advancing
+        # to the aligned offset leaves fewer than `size` bytes at the tail, so
+        # Core writes past the end -- SIGBUS, with no Python traceback. Reserve
+        # a full extra alignment window.
         size = lib.csmGetSizeofModel(self.moc)
-        self._mbuf = C.create_string_buffer(size + 256)
-        maddr = C.addressof(self._mbuf)
+        self._mbuf = np.zeros(size + 256, dtype=np.uint8)
+        maddr = self._mbuf.ctypes.data
         self.model = lib.csmInitializeModelInPlace(
             self.moc, maddr + ((-maddr) % 256), size)
         if not self.model:
@@ -122,7 +132,7 @@ class Model:
 
     def canvas(self) -> tuple[float, float, float, float, float]:
         size, origin, ppu = Vec2(), Vec2(), C.c_float()
-        self.lib.csmGetCanvasInfo(self.model, C.byref(size), C.byref(origin),
+        self.lib.csmReadCanvasInfo(self.model, C.byref(size), C.byref(origin),
                                   C.byref(ppu))
         return size.X, size.Y, origin.X, origin.Y, ppu.value
 

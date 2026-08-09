@@ -201,9 +201,12 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
 
     if feature:
         bound_ids.append(feature)
-        # An eyeball needs both look axes to be useful.
+        # An eyeball needs both look axes to be useful, and it must also hide
+        # under the lid when the eye closes -- otherwise the lid collapses over
+        # a stationary iris and the eye still reads as open.
         if feature == "ParamEyeBallX":
             bound_ids.append("ParamEyeBallY")
+            bound_ids.append("ParamEyeROpen" if _is_right(side) else "ParamEyeLOpen")
         # A mouth needs both open and shape, or it can only gape.
         if feature == "ParamMouthOpenY":
             bound_ids.append("ParamMouthForm")
@@ -243,6 +246,9 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
         elif feature == "ParamEyeBallX":
             v = eyeball_look(v, ctx, bbox, vals["ParamEyeBallX"],
                              vals.get("ParamEyeBallY", 0.0))
+            lid = vals.get("ParamEyeROpen" if _is_right(side) else "ParamEyeLOpen")
+            if lid is not None and lid < 1.0:
+                v = blink(v, lid, bbox, role)
         elif feature in ("ParamBrowLY", "ParamBrowRY"):
             v = brow_raise(v, vals[feature], bbox)
 
