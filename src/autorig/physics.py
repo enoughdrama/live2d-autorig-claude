@@ -50,19 +50,32 @@ PROFILES = {
 HEAD_DRIVEN = {"hair_front", "hair_side", "hair_back", "ribbon", "accessory", "ear"}
 
 
-def _inputs(head_driven: bool) -> list[dict]:
+def _inputs(head_driven: bool, reflect: bool = False) -> list[dict]:
+    """Inputs that drive a chain.
+
+    `reflect` mirrors the response horizontally. A right-side strand hangs on
+    the opposite side of the pivot from its left-side twin, so the same head
+    turn should push it the other way; without this both sides swing in
+    lockstep and the hair reads as one rigid helmet.
+
+    Head-driven chains also take pitch, at low weight. Nodding does swing hair,
+    just far less than turning does -- omitting it entirely makes a nod look
+    like the head is moving inside static hair.
+    """
     if head_driven:
         return [
             {"Source": {"Target": "Parameter", "Id": "ParamAngleX"},
-             "Weight": 60.0, "Type": "X", "Reflect": False},
+             "Weight": 60.0, "Type": "X", "Reflect": reflect},
             {"Source": {"Target": "Parameter", "Id": "ParamAngleZ"},
-             "Weight": 40.0, "Type": "Angle", "Reflect": False},
+             "Weight": 40.0, "Type": "Angle", "Reflect": reflect},
+            {"Source": {"Target": "Parameter", "Id": "ParamAngleY"},
+             "Weight": 15.0, "Type": "Y", "Reflect": False},
         ]
     return [
         {"Source": {"Target": "Parameter", "Id": "ParamBodyAngleX"},
-         "Weight": 60.0, "Type": "X", "Reflect": False},
+         "Weight": 60.0, "Type": "X", "Reflect": reflect},
         {"Source": {"Target": "Parameter", "Id": "ParamBodyAngleZ"},
-         "Weight": 40.0, "Type": "Angle", "Reflect": False},
+         "Weight": 40.0, "Type": "Angle", "Reflect": reflect},
     ]
 
 
@@ -109,21 +122,25 @@ def _normalization() -> dict:
     }
 
 
-def build_physics(chains: list[tuple[str, str, str]], fps: int = 30) -> dict:
+def build_physics(chains: list[tuple[str, str, str, str | None]],
+                  fps: int = 30) -> dict:
     """Build physics3.json.
 
-    chains: list of (setting_id, human_name, sway_parameter_id, role) tuples --
-    see physics_chains() which derives them from the rig plan.
+    chains: list of (human_name, sway_parameter_id, role, side) tuples -- see
+    physics_chains() which derives them from the rig plan.
     """
     settings = []
     dictionary = []
     total_in = total_out = total_v = 0
 
-    for idx, (name, param_id, role) in enumerate(chains):
+    for idx, chain in enumerate(chains):
+        name, param_id, role = chain[0], chain[1], chain[2]
+        side = chain[3] if len(chain) > 3 else None
         profile = PROFILES.get(role, PROFILES["accessory"])
         sid = f"PhysicsSetting{idx + 1}"
         verts = _vertices(profile)
-        ins = _inputs(role in HEAD_DRIVEN)
+        ins = _inputs(role in HEAD_DRIVEN,
+                      reflect=(side or "").lower().startswith("r"))
         outs = _outputs(param_id, profile, len(verts))
 
         settings.append({
@@ -156,7 +173,19 @@ def build_physics(chains: list[tuple[str, str, str]], fps: int = 30) -> dict:
     }
 
 
-def physics_chains(sway_params: list[tuple[str, str, str]]) -> list[tuple[str, str, str]]:
-    """Pass through -- kept as a seam so chain selection can grow smarter
-    (grouping strands, merging symmetric pairs) without touching the emitter."""
-    return sway_params
+def physics_chains(sway_params: list[tuple]) -> list[tuple]:
+    """Order chains so heavier, slower parts settle behind lighter ones.
+
+    Kept as a seam so chain selection can grow smarter (grouping strands,
+    merging symmetric pairs) without touching the emitter.
+
+    Sorting by delay is not cosmetic: physics settings are evaluated in file
+    order, and a long chain reading a short chain's already-updated value in the
+    same frame is what makes fine strands appear to lead the mass they hang
+    from. Heavy first means light strands trail.
+    """
+    def weight(chain: tuple) -> float:
+        role = chain[2] if len(chain) > 2 else ""
+        return -PROFILES.get(role, PROFILES["accessory"]).delay
+
+    return sorted(sway_params, key=weight)

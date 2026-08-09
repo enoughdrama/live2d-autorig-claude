@@ -173,6 +173,52 @@ hierarchy — a small declarative plan. It must never emit vertex coordinates or
 keyform grids; stage 3 computes those deterministically. Models are unreliable
 at generating thousands of numbers.
 
+## Ambiguous rig values — where "it loads" hides "it moves wrong"
+
+Every bug in this section passed `csmHasMocConsistency`, deformed geometry, and
+reported all parameters as driving something. Structural validators cannot see
+any of them; only measuring the runtime's own output at specific poses can.
+
+**The role vocabulary must be total.** `classify.py` emits roles by regex;
+`rig.py` sorts them into `HEAD_ROLES`/`BODY_ROLES`. A role in neither falls
+through to the body group *silently* — `blush`, `breast`, `collar`, `hair`, and
+`hair_ahoge` all did, so a blush rigged to the torso and slid off the cheek on
+every head turn. Locked by `test_role_vocabulary_total`. The same class of bug
+had `classify.PHYSICS_ROLES` and `autorig.PHYSICS_ROLES` as two literals that
+drifted apart in both directions; the rig now derives its set from the
+classifier's.
+
+**Dead config reads as working config.** `ROLE_FOLLOW` declared `neck: 0.35`,
+but `neck` is in `BODY_ROLES`, so `head_transform` was never called on it — the
+constant had no effect and the neck stayed perfectly rigid (displacement
+`0.0000`) through a 30° head turn. Roles on the head/body boundary need
+`NECK_ROLES`: both transforms, with the head's contribution ramped by height so
+the jaw follows and the shoulders stay put.
+
+**A closed eye is a line, not a hole.** Scaling every eye part to exactly zero
+height makes the eye *vanish* rather than close, because the lash and lid
+geometry disappears along with the sclera. `BLINK_PROFILE` gives each part a
+residual height (lids/lashes keep 6–10%, sclera and iris go to 0) and a separate
+anchor. The remaining gap is the honest ceiling: a fully closed lid is *artwork*,
+and no analytic transform can invent it from open-eye art.
+
+**Hanging parts rotate; they do not shear.** `sway()` was a depth-weighted
+horizontal shear, so at full deflection the tail tip translated 0.43 model units
+while the strand's length stayed constant — a motion no pendulum makes, and the
+real reason the tail read as "offset to one side". Rotating about the centre of
+the part's own top edge, with the angle ramped by depth**^1.5**, preserves
+length and pins the anchor.
+
+**Keyform count is a product, so binding is a budget.** Giving the neck all
+three head angles plus both body angles plus breath costs 3·3·3·3·3·2 = 486
+keyforms ≈ 5.4 MB *per mesh*. Dropping pitch — which the throat barely registers
+— brings it to 162. Always price a binding before adding it.
+
+**Physics needs sides.** A right-side strand hangs on the opposite side of the
+pivot from its left-side twin, so the same head turn must push it the other way;
+without `Reflect` on the mirrored inputs both sides swing in lockstep and the
+hair reads as a rigid helmet.
+
 ## Validation order
 
 1. `python3 tests/test_io.py` — byte-identical round-trip of real models. Run
@@ -180,7 +226,17 @@ at generating thousands of numbers.
 2. `./build/validate out.moc3` — official Core accepts and initializes it.
 3. `./build/validate out.moc3 <i> <v>` — geometry actually moves when driven.
    A rig that loads but never deforms is the most common silent failure.
-4. Load in VTube Studio. Only a human can judge whether motion looks right.
+4. `python3 tests/test_pipeline.py` — measures the runtime's deformation output
+   at specific poses. This is the only layer that catches *wrong* motion as
+   opposed to *absent* motion; every bug in the section above got through 1–3.
+5. `python3 tools/render_model.py out/Aka --param ParamEyeLOpen=0` — look at it.
+6. Load in VTube Studio. Only a human can judge whether motion looks right.
+
+When adding a deformation, add the pose measurement with it. The pattern is
+always the same: snapshot vertices at rest, set the parameter, snapshot again,
+and assert on the *difference* — magnitude, which vertices moved, and whether
+the anchor stayed put. Asserting only that something changed is what let the
+transposed keyform grid and the shear-instead-of-swing survive.
 
 ## Scope honesty
 

@@ -15,11 +15,13 @@ from pathlib import Path
 
 import numpy as np
 
+from . import classify as _classify
 from .build import ArtMeshSpec, RigBuilder
 from .mesh import build_mesh
 from .rig import (
     BODY_ROLES,
     HEAD_ROLES,
+    NECK_ROLES,
     ROLE_FOLLOW,
     STANDARD_PARAMS,
     RigContext,
@@ -31,6 +33,7 @@ from .rig import (
     head_transform,
     mouth_form,
     mouth_open,
+    neck_transform,
     sway,
 )
 
@@ -48,12 +51,22 @@ ROLE_PARAM = {
 }
 
 # Roles that breathe (torso and what sits on it).
-BREATH_ROLES = {"body", "neck", "arm", "skirt", "skirt_frill"}
+BREATH_ROLES = {"body", "neck", "arm", "skirt", "skirt_frill", "collar", "breast"}
 
 # Roles that get a physics-driven sway parameter. physics3.json writes into
 # these; without a parameter that actually deforms, physics has nothing to drive.
-PHYSICS_ROLES = {"hair_front", "hair_side", "hair_back", "ribbon",
-                 "accessory", "ear", "tail", "skirt", "skirt_frill"}
+#
+# Sourced from classify.PHYSICS_ROLES rather than restated. These were two
+# independent literals that had already drifted apart in both directions --
+# classify marked breast/hair_ahoge as physics parts that never got a sway
+# parameter, while the rig built sway for accessory/ear/hair_front that classify
+# did not consider physical. The classifier owns the vocabulary; the extras here
+# are roles the rig genuinely animates that classify treats as static.
+PHYSICS_ROLES = set(_classify.PHYSICS_ROLES) | {
+    "hair_front",   # bangs sway, just less than side/back hair
+    "accessory",    # clips and pins hang off the head
+    "ear",          # animal ears flick
+}
 
 
 def _bbox_model(verts: np.ndarray) -> tuple[float, float, float, float]:
@@ -129,7 +142,7 @@ def build_rig(build_dir: str | Path, pixels_per_unit: float = 1000.0,
         if role in PHYSICS_ROLES:
             sway_id = f"ParamSway{len(sway_params):02d}"
             pidx[sway_id] = rb.add_param(sway_id, -1.0, 1.0, 0.0, [-1.0, 0.0, 1.0])
-            sway_params.append((name.replace("_", " "), sway_id, role))
+            sway_params.append((name.replace("_", " "), sway_id, role, side))
 
         bound, deform = _plan_deformation(role, side, mesh, ctx, pidx, sway_id)
 
@@ -184,6 +197,7 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
     base = mesh.verts.astype(np.float64)
     bbox = _bbox_model(base)
     is_head = role in HEAD_ROLES
+    is_neck = role in NECK_ROLES
     follow = ROLE_FOLLOW.get(role, 1.0)
 
     feature = _resolve_param(role, side)
@@ -191,10 +205,21 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
 
     if is_head:
         bound_ids += ["ParamAngleX", "ParamAngleY", "ParamAngleZ"]
+    elif is_neck:
+        # Driven by both: the head drags it, the body carries it.
+        #
+        # Pitch (AngleY) is deliberately omitted. Keyform count is the PRODUCT
+        # of bound key counts, so adding it takes the neck from 162 keyforms to
+        # 486 -- 5.4 MB for a single mesh. Yaw and roll carry nearly all of the
+        # visible neck motion; pitch mostly slides the head up and down, which
+        # the throat barely registers.
+        bound_ids += ["ParamAngleX", "ParamAngleZ",
+                      "ParamBodyAngleX", "ParamBodyAngleZ"]
     else:
         bound_ids += ["ParamBodyAngleX", "ParamBodyAngleZ"]
-        if role in BREATH_ROLES:
-            bound_ids.append("ParamBreath")
+
+    if not is_head and role in BREATH_ROLES:
+        bound_ids.append("ParamBreath")
 
     if sway_id:
         bound_ids.append(sway_id)
@@ -225,6 +250,14 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
                                vals.get("ParamAngleY", 0.0),
                                vals.get("ParamAngleZ", 0.0))
         else:
+            if is_neck:
+                # Head drag first, in the rest frame, then the body carries the
+                # result. Reversing this would rotate the head's contribution
+                # by the body lean and double-count it.
+                v = neck_transform(v, ctx, follow,
+                                   vals.get("ParamAngleX", 0.0),
+                                   vals.get("ParamAngleY", 0.0),
+                                   vals.get("ParamAngleZ", 0.0))
             v = body_transform(v, ctx, 1.0,
                                vals.get("ParamBodyAngleX", 0.0),
                                vals.get("ParamBodyAngleZ", 0.0))

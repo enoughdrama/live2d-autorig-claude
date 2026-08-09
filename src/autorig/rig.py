@@ -41,20 +41,36 @@ STANDARD_PARAMS = [
 ]
 
 # Roles that belong to the head and therefore follow head rotation.
+#
+# Every role classify.py can emit must appear in exactly one of these two sets.
+# A role in neither silently falls through to the body group -- a blush would
+# then rig to the torso and slide off the cheek on every head turn. Locked by
+# test_role_vocabulary_total.
 HEAD_ROLES = {
     "face", "eye_white", "eyeball", "eyelid", "eyelash", "eye_light",
     "eye_shadow", "eyebrow", "mouth", "mouth_inner", "nose", "ear",
-    "hair_front", "hair_side", "hair_back", "accessory", "ribbon",
+    "hair_front", "hair_side", "hair_back", "hair", "hair_ahoge",
+    "accessory", "ribbon", "blush",
 }
 # Roles that belong to the body and sway with it, not with the head.
-BODY_ROLES = {"body", "neck", "arm", "hand", "leg", "skirt", "skirt_frill", "tail"}
+BODY_ROLES = {"body", "neck", "arm", "hand", "leg", "skirt", "skirt_frill",
+              "tail", "collar", "breast", "unknown"}
+
+# Roles that sit on the boundary: anchored to the body but carried partly by the
+# head. They get BOTH transforms, weighted by ROLE_FOLLOW. Without this the neck
+# is rigid while the head turns, and the jaw visibly detaches from the throat.
+NECK_ROLES = {"neck", "collar"}
 
 # How strongly the head rotation carries each role. Hair overshoots slightly --
 # it is further from the pivot and reads as following the head.
 ROLE_FOLLOW = {
     "hair_front": 1.05, "hair_side": 1.05, "hair_back": 0.95,
+    "hair": 1.0, "hair_ahoge": 1.15,
     "ear": 1.02, "accessory": 1.0, "ribbon": 1.0,
-    "neck": 0.35,
+    "blush": 1.0,
+    # Applied via NECK_ROLES, not HEAD_ROLES: a neck that followed the head at
+    # full strength would tear away from the shoulders.
+    "neck": 0.35, "collar": 0.20,
 }
 
 
@@ -135,20 +151,76 @@ def body_transform(verts: np.ndarray, ctx: RigContext, weight: float,
     return v
 
 
+# How each eye part behaves at openness=0, as (residual height, anchor height).
+#   residual: fraction of original height kept when fully closed. Zero makes the
+#             part vanish; a closed eye is a LINE, not an absence.
+#   anchor:   position within the part's own bbox that stays put, 0=bottom.
+#
+# These differ per part because a real blink is not one uniform squash: the lash
+# line sweeps down and stays visible, the sclera is occluded entirely, and the
+# lid skin compresses toward the crease.
+BLINK_PROFILE = {
+    "eyelid":     (0.06, 0.30),   # lid skin -- stays as the closed lid line
+    "eyelash":    (0.10, 0.28),   # lashes remain visible along the seam
+    "eye_white":  (0.00, 0.34),   # sclera fully hidden under the lid
+    "eyeball":    (0.00, 0.34),   # iris hidden with it
+    "eye_light":  (0.00, 0.34),
+    "eye_shadow": (0.05, 0.30),
+}
+_BLINK_DEFAULT = (0.0, 0.34)
+
+
+def neck_transform(verts: np.ndarray, ctx: RigContext, follow: float,
+                   angle_x: float, angle_y: float, angle_z: float) -> np.ndarray:
+    """Head motion partially carried into a body-anchored part.
+
+    The neck is the one place where the head/body split is a lie: it belongs to
+    the body but the head drags it. Applying head_transform at reduced `follow`
+    is not enough on its own, because that moves the whole neck uniformly and
+    detaches it from the shoulders. So the head's displacement is additionally
+    ramped by height -- full at the top where it meets the jaw, zero at the
+    bottom where it meets the torso.
+    """
+    moved = head_transform(verts, ctx, follow, angle_x, angle_y, angle_z)
+    v = verts.astype(np.float64)
+    y0, y1 = v[:, 1].min(), v[:, 1].max()
+    span = max(y1 - y0, 1e-6)
+    w = np.clip((v[:, 1] - y0) / span, 0.0, 1.0)[:, None]
+    return v + (moved - v) * w
+
+
 def blink(verts: np.ndarray, openness: float, bbox: tuple[float, float, float, float],
           role: str) -> np.ndarray:
-    """Collapse an eye part toward its lower lid as openness goes to 0.
+    """Close an eye part toward its lid line as openness goes to 0.
 
-    Anchoring at the lower lid (not the centre) is what makes a blink read as
-    an eyelid closing rather than the eye shrinking.
+    Anchoring below centre (not at the middle) is what makes a blink read as an
+    eyelid dropping rather than the eye shrinking symmetrically.
+
+    The residual height matters as much as the anchor. Scaling every part to
+    exactly zero -- which this did originally -- makes the closed eye read as a
+    hole in the face, because the lash and lid geometry disappears along with
+    the sclera. Keeping a few percent leaves a drawn line where the closed lid
+    belongs. It is still an approximation: a hand rig draws a dedicated
+    closed-lid keyform, which no analytic transform can invent from open-eye art.
     """
     if openness >= 1.0:
         return verts
     v = verts.astype(np.float64).copy()
     _, y0, _, y1 = bbox
-    # eyeballs/whites hide behind the lid; lids themselves squash
-    anchor = y0 + (y1 - y0) * 0.35
-    v[:, 1] = anchor + (v[:, 1] - anchor) * max(openness, 0.0)
+    span = y1 - y0
+    if span <= 0.0:
+        return v
+
+    residual, anchor_f = BLINK_PROFILE.get(role, _BLINK_DEFAULT)
+    t = max(openness, 0.0)
+    # Never scale below `residual`: at t=0 the part keeps that fraction of height.
+    scale = residual + (1.0 - residual) * t
+    anchor = y0 + span * anchor_f
+    v[:, 1] = anchor + (v[:, 1] - anchor) * scale
+
+    # A closing lid also rides downward slightly -- the lash line travels to
+    # where the eye actually shuts rather than compressing in place.
+    v[:, 1] -= (1.0 - t) * span * 0.10
     return v
 
 
@@ -202,24 +274,54 @@ def breath(verts: np.ndarray, ctx: RigContext, amount: float, weight: float) -> 
     return v
 
 
+# Peak swing angle in degrees at |amount|=1, per role. A pendulum's arc, not a
+# shear: the strand rotates about where it attaches.
+SWAY_ANGLE = {
+    "hair_front": 8.0, "hair_side": 12.0, "hair_back": 12.0,
+    "hair": 10.0, "hair_ahoge": 22.0,
+    "ribbon": 18.0, "accessory": 8.0, "ear": 6.0,
+    "tail": 20.0, "skirt": 7.0, "skirt_frill": 9.0,
+    "breast": 4.0,
+}
+_SWAY_DEFAULT = 10.0
+
+
 def sway(verts: np.ndarray, ctx: RigContext, amount: float,
          bbox: tuple[float, float, float, float], role: str) -> np.ndarray:
     """Physics-driven swing of a hanging part.
 
-    Displacement is weighted by distance below the part's own top edge, so the
-    attachment point stays put and the free end travels -- a rigid shift would
-    detach hair from the scalp. This is the motion physics3.json re-drives with
-    lag; on its own the parameter just poses the strand.
+    Modelled as a rotation about the part's own attachment point (the centre of
+    its top edge), with the angle ramped in by depth so the strand bends rather
+    than swinging rigidly like a plank.
+
+    This was originally a horizontal shear weighted by depth. A shear stretches
+    the part sideways instead of swinging it, which is what made the tail read as
+    offset to one side rather than swaying -- at full deflection its tip
+    translated 0.43 model units horizontally while its length stayed constant,
+    a motion no physical pendulum makes.
+
+    This is the motion physics3.json re-drives with lag; on its own the
+    parameter just poses the strand.
     """
     if amount == 0.0:
         return verts
     v = verts.astype(np.float64).copy()
-    _, y0, _, y1 = bbox
+    x0, y0, x1, y1 = bbox
     span = max(y1 - y0, 1e-6)
-    # 0 at the top (anchor), 1 at the bottom (free end)
-    t = np.clip((y1 - v[:, 1]) / span, 0.0, 1.0)
-    reach = span * (0.28 if role != "skirt" else 0.16)
-    v[:, 0] += amount * reach * t
-    # a swinging pendulum also rises slightly as it swings out
-    v[:, 1] += abs(amount) * reach * 0.10 * t
+
+    # Pivot: centre of the top edge -- where hair meets scalp, a tail meets hip.
+    pivot = np.array([(x0 + x1) * 0.5, y1], dtype=np.float64)
+
+    # Depth below the anchor, 0 at the top and 1 at the free end. Squaring it
+    # makes the bend accelerate toward the tip, which is how a flexible strand
+    # actually deflects -- a linear ramp reads as a rigid hinge.
+    t = np.clip((y1 - v[:, 1]) / span, 0.0, 1.0) ** 1.5
+
+    theta = math.radians(SWAY_ANGLE.get(role, _SWAY_DEFAULT) * amount)
+    # Per-vertex rotation angle: the strand curves progressively.
+    ang = theta * t
+    c, s = np.cos(ang), np.sin(ang)
+    d = v - pivot
+    v[:, 0] = pivot[0] + d[:, 0] * c - d[:, 1] * s
+    v[:, 1] = pivot[1] + d[:, 0] * s + d[:, 1] * c
     return v
