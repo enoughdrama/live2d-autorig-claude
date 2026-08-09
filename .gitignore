@@ -1,0 +1,10 @@
+build/
+out/
+samples/*.moc3
+samples/*.psd
+samples/example-models/
+reference/purism/
+reference/core/
+__pycache__/
+*.pyc
+.DS_Store
