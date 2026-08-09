@@ -33,8 +33,12 @@ STANDARD_PARAMS = [
     ("ParamEyeBallY",    -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
     ("ParamBrowLY",      -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
     ("ParamBrowRY",      -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
+    ("ParamBrowLForm",   -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
+    ("ParamBrowRForm",   -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
     ("ParamMouthOpenY",   0.0,   1.0,  0.0, [0.0, 1.0]),
     ("ParamMouthForm",   -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
+    ("ParamMouthX",      -1.0,   1.0,  0.0, [-1.0, 0.0, 1.0]),
+    ("ParamEyeSmile",      0.0,   1.0,  0.0, [0.0, 1.0]),
     ("ParamBodyAngleX", -10.0,  10.0,  0.0, [-10.0, 0.0, 10.0]),
     ("ParamBodyAngleZ", -10.0,  10.0,  0.0, [-10.0, 0.0, 10.0]),
     ("ParamBreath",       0.0,   1.0,  0.0, [0.0, 1.0]),
@@ -224,6 +228,22 @@ def blink(verts: np.ndarray, openness: float, bbox: tuple[float, float, float, f
     return v
 
 
+def eye_smile(verts: np.ndarray, amount: float, bbox: tuple, role: str) -> np.ndarray:
+    """Smiling eye-arc: lower lid/lash rises toward the upper lid, independent
+    of blink. Only lid and lash geometry are affected -- unlike blink, a smile
+    should not hide the iris, it narrows the eye into a happy crescent."""
+    if amount <= 0.0 or role not in ("eyelid", "eyelash"):
+        return verts
+    v = verts.astype(np.float64).copy()
+    _, y0, _, y1 = bbox
+    span = max(y1 - y0, 1e-6)
+    # Only the lower half of the part rises; the upper lid/lash stays put.
+    t = np.clip((v[:, 1] - y0) / span, 0.0, 1.0)
+    lower = np.clip(1.0 - 2.0 * t, 0.0, 1.0)
+    v[:, 1] += amount * span * 0.45 * lower
+    return v
+
+
 def eyeball_look(verts: np.ndarray, ctx: RigContext, bbox: tuple,
                  bx: float, by: float) -> np.ndarray:
     """Shift the iris within the eye. Range is a fraction of the eye's own
@@ -239,6 +259,24 @@ def brow_raise(verts: np.ndarray, amount: float, bbox: tuple) -> np.ndarray:
     v = verts.astype(np.float64).copy()
     _, y0, _, y1 = bbox
     v[:, 1] += amount * (y1 - y0) * 0.5
+    return v
+
+
+def brow_form(verts: np.ndarray, amount: float, bbox: tuple, is_right: bool) -> np.ndarray:
+    """Angry/sad brow tilt: inner end drops, outer end lifts (or reverses).
+
+    Independent of brow_raise (which moves the whole brow up/down uniformly) --
+    a tilt needs opposite motion at the two ends, which a single Y offset can't
+    express. Inner is the side toward the face centerline.
+    """
+    if amount == 0.0:
+        return verts
+    v = verts.astype(np.float64).copy()
+    x0, y0, x1, y1 = bbox
+    span = max(x1 - x0, 1e-6)
+    # t=0 at the inner end, 1 at the outer end, so the sign flips per side.
+    t = (v[:, 0] - x0) / span if is_right else (x1 - v[:, 0]) / span
+    v[:, 1] += amount * (y1 - y0) * 0.35 * (t - 0.5) * 2.0
     return v
 
 
@@ -262,6 +300,17 @@ def mouth_form(verts: np.ndarray, amount: float, bbox: tuple) -> np.ndarray:
     t = np.clip(np.abs(v[:, 0] - cx) / half, 0.0, 1.0)
     v[:, 0] = cx + (v[:, 0] - cx) * (1.0 + amount * 0.12)
     v[:, 1] += amount * (y1 - y0) * 0.30 * t
+    return v
+
+
+def mouth_x(verts: np.ndarray, amount: float, bbox: tuple) -> np.ndarray:
+    """Sideways mouth shift -- smirk, or a talking mouth that doesn't stay
+    dead-centered. Whole part translates; a real jaw/lip shift is not a warp."""
+    if amount == 0.0:
+        return verts
+    v = verts.astype(np.float64).copy()
+    x0, _, x1, _ = bbox
+    v[:, 0] += amount * (x1 - x0) * 0.12
     return v
 
 

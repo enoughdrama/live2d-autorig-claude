@@ -171,7 +171,10 @@ _PRETTY = {
     "ParamEyeLOpen": "Eye Open L", "ParamEyeROpen": "Eye Open R",
     "ParamEyeBallX": "Eyeball X", "ParamEyeBallY": "Eyeball Y",
     "ParamBrowLY": "Brow L", "ParamBrowRY": "Brow R",
+    "ParamBrowLForm": "Brow L Form", "ParamBrowRForm": "Brow R Form",
     "ParamMouthOpenY": "Mouth Open", "ParamMouthForm": "Mouth Form",
+    "ParamMouthX": "Mouth X",
+    "ParamEyeSmile": "Eye Smile",
     "ParamBodyAngleX": "Body Angle X", "ParamBodyAngleZ": "Body Angle Z",
     "ParamBreath": "Breath",
 }

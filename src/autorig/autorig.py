@@ -28,11 +28,14 @@ from .rig import (
     body_transform,
     breath,
     blink,
+    brow_form,
     brow_raise,
+    eye_smile,
     eyeball_look,
     head_transform,
     mouth_form,
     mouth_open,
+    mouth_x,
     neck_transform,
     sway,
 )
@@ -91,6 +94,10 @@ def _resolve_param(role: str, side: str | None) -> str | None:
     if base == "ParamBrowLY":
         return "ParamBrowRY" if _is_right(side) else "ParamBrowLY"
     return base
+
+
+def _brow_form_param(side: str | None) -> str:
+    return "ParamBrowRForm" if _is_right(side) else "ParamBrowLForm"
 
 
 def build_rig(build_dir: str | Path, pixels_per_unit: float = 1000.0,
@@ -224,6 +231,7 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
     if sway_id:
         bound_ids.append(sway_id)
 
+    brow_form_id = mouth_x_bound = eye_smile_id = None
     if feature:
         bound_ids.append(feature)
         # An eyeball needs both look axes to be useful, and it must also hide
@@ -235,6 +243,14 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
         # A mouth needs both open and shape, or it can only gape.
         if feature == "ParamMouthOpenY":
             bound_ids.append("ParamMouthForm")
+            bound_ids.append("ParamMouthX")
+            mouth_x_bound = True
+        if feature in ("ParamEyeLOpen", "ParamEyeROpen") and role in ("eyelid", "eyelash"):
+            bound_ids.append("ParamEyeSmile")
+            eye_smile_id = "ParamEyeSmile"
+    if role == "eyebrow":
+        brow_form_id = _brow_form_param(side)
+        bound_ids.append(brow_form_id)
 
     bound = [pidx[b] for b in bound_ids]
     std_keys = dict((p[0], p[4]) for p in STANDARD_PARAMS)
@@ -274,8 +290,12 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
             if vals.get("ParamMouthForm"):
                 v = mouth_form(v, vals["ParamMouthForm"], bbox)
             v = mouth_open(v, vals[feature], bbox)
+            if mouth_x_bound and vals.get("ParamMouthX"):
+                v = mouth_x(v, vals["ParamMouthX"], bbox)
         elif feature in ("ParamEyeLOpen", "ParamEyeROpen"):
             v = blink(v, vals[feature], bbox, role)
+            if eye_smile_id and vals.get(eye_smile_id):
+                v = eye_smile(v, vals[eye_smile_id], bbox, role)
         elif feature == "ParamEyeBallX":
             v = eyeball_look(v, ctx, bbox, vals["ParamEyeBallX"],
                              vals.get("ParamEyeBallY", 0.0))
@@ -284,6 +304,9 @@ def _plan_deformation(role, side, mesh, ctx, pidx, sway_id=None):
                 v = blink(v, lid, bbox, role)
         elif feature in ("ParamBrowLY", "ParamBrowRY"):
             v = brow_raise(v, vals[feature], bbox)
+
+        if brow_form_id and vals.get(brow_form_id):
+            v = brow_form(v, vals[brow_form_id], bbox, _is_right(side))
 
         return v
 

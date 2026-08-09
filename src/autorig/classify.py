@@ -232,9 +232,12 @@ def build_params(parts: list[dict]) -> list[dict]:
         if any(r == "eyeball" and s == side for r, s in sides):
             add(f"Eye:: {side.title()}:: Move", "2d", [f"eyeball:{side}"], "pupil tracking")
     if "eyebrow" in roles:
-        add("Brow:: Emotion", "2d", ["eyebrow"], "up/down + angle")
+        add("Brow:: Emotion", "2d", ["eyebrow"], "up/down + angry/sad form")
+    for side in ("left", "right"):
+        if any(r == "eyelid" and s == side for r, s in sides):
+            add(f"Eye:: {side.title()}:: Smile", "1d", [f"eyelid:{side}"], "0=neutral 1=smiling arc")
     if roles & {"mouth", "mouth_inner"}:
-        add("Mouth:: Shape", "2d", ["mouth"], "open/close + form")
+        add("Mouth:: Shape", "2d", ["mouth"], "open/close + form + x-shift")
     if "body" in roles:
         add("Body:: Yaw-Pitch", "2d", ["body"], "torso lean")
         add("Body:: Roll", "1d", ["body"], "torso tilt")
