@@ -369,7 +369,55 @@ def test_blink_sides_are_independent():
     print("ok: left and right blink independently")
 
 
+def test_synonyms_do_not_touch_english():
+    """Non-English names classify, and English names are unaffected.
+
+    The synonym pass rewrites tokens inside normalize(), which every rule,
+    detect_side, is_shadow and is_highlight route through. A greedy or
+    unanchored pattern there would corrupt English layer names silently --
+    'ear' inside 'bear', or a side token eaten mid-word -- so both directions
+    are asserted, not just the new one.
+    """
+    from autorig.classify import classify_one, detect_side, normalize
+
+    canvas = [1000, 2000]
+
+    # English names must normalize exactly as they did before synonyms existed.
+    for name in ("Front Hair L1", "Eye L Eyelid2", "Back Side Hair",
+                 "Eye:: Left", "Collar2", "Arm R Light"):
+        assert normalize(name) == _plain_normalize(name), \
+            f"synonym pass altered English name {name!r} -> {normalize(name)!r}"
+
+    # Russian names must reach the right role and side.
+    for name, role, side in (("брови л", "eyebrow", "left"),
+                             ("брови п", "eyebrow", "right"),
+                             ("ухо п", "ear", "right"),
+                             ("нос", "nose", None),
+                             ("румяна л", "blush", None),
+                             ("основа", "body", None),
+                             ("рога", "horn", None)):
+        layer = {"name": name, "file": "x.png", "index": 0,
+                 "center": [500, 400]}
+        got = classify_one(layer, canvas)
+        assert got["role"] == role, f"{name!r} -> {got['role']!r}, want {role!r}"
+        if side is not None:
+            assert got["side"] == side, \
+                f"{name!r} -> side {got['side']!r}, want {side!r}"
+
+    # 'блик нос' is a highlight sublayer, not an independent nose.
+    assert detect_side("ухл д") == "left", "typo'd side token must still resolve"
+    print("ok: synonyms map non-English names without touching English ones")
+
+
+def _plain_normalize(name: str) -> str:
+    """normalize() as it was before the synonym pass -- the regression baseline."""
+    import re
+    s = re.sub(r"([a-z])(\d)", r"\1 \2", name.lower())
+    return re.sub(r"\s+", " ", re.sub(r"[:_\-/]+", " ", s)).strip()
+
+
 if __name__ == "__main__":
+    test_synonyms_do_not_touch_english()
     test_manifest_shape()
     test_physics_shape()
     test_role_vocabulary_total()

@@ -52,7 +52,7 @@ STANDARD_PARAMS = [
 # test_role_vocabulary_total.
 HEAD_ROLES = {
     "face", "eye_white", "eyeball", "eyelid", "eyelash", "eye_light",
-    "eye_shadow", "eyebrow", "mouth", "mouth_inner", "nose", "ear",
+    "eye_shadow", "eyebrow", "mouth", "mouth_inner", "nose", "ear", "horn",
     "hair_front", "hair_side", "hair_back", "hair", "hair_ahoge",
     "accessory", "ribbon", "blush",
 }
@@ -70,7 +70,9 @@ NECK_ROLES = {"neck", "collar"}
 ROLE_FOLLOW = {
     "hair_front": 1.05, "hair_side": 1.05, "hair_back": 0.95,
     "hair": 1.0, "hair_ahoge": 1.15,
-    "ear": 1.02, "accessory": 1.0, "ribbon": 1.0,
+    # Horn is rigid bone further from the pivot than the ear, so it leads the
+    # head slightly -- but far less than hair, which lags and whips.
+    "ear": 1.02, "horn": 1.06, "accessory": 1.0, "ribbon": 1.0,
     "blush": 1.0,
     # Applied via NECK_ROLES, not HEAD_ROLES: a neck that followed the head at
     # full strength would tear away from the shoulders.

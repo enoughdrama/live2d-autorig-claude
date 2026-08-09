@@ -63,6 +63,7 @@ RULES: list[tuple[str, str, str | None, float]] = [
     ("skirt",        r"\bskirt\b|\bdress\b",                "body",      0.9),
     ("collar",       r"\bcollar\b|\bchoker\b",              "neck",      0.85),
     ("breast",       r"\bbreast\b|\bbust\b",                "body",      0.85),
+    ("horn",         r"\bhorn\b|\bantler\b",                 "head",      0.85),
     ("accessory",    r"\bleaf\b|\bhat\b|\bcap\b|clip|pin\b", "head",     0.6),
     ("body",         r"\bbody\b|\btorso\b|\bchest\b",       None,        0.9),
 ]
@@ -74,8 +75,47 @@ PHYSICS_ROLES = {"hair_back", "hair_side", "hair_ahoge", "tail", "ribbon",
 
 # Roles whose left/right variants are separate rig targets.
 SIDED_ROLES = {"eyelid", "eyeball", "eye_white", "eye_light", "eyelash",
-               "eye_shadow", "eyebrow", "arm", "hand", "leg", "ear",
-               "hair_front", "hair_side", "hair_back", "breast"}
+               "eye_shadow", "eyebrow", "arm", "hand", "leg", "ear", "horn",
+               "hair_front", "hair_side", "hair_back", "breast", "blush"}
+
+
+# Non-English layer vocabulary, mapped to the English tokens the RULES and
+# detect_side already speak. Artists name layers in their own language; without
+# this every such layer falls through to the 'unknown' geometry fallback and
+# the model ships with no eyes, mouth or brows bound.
+#
+# Applied whole-word after separator normalisation, longest key first, so
+# 'блик нос' resolves both tokens and 'нос' does not eat the 'нос' inside a
+# longer word. Only unambiguous, high-frequency terms belong here — a wrong
+# translation mis-rigs silently, which is worse than falling through to review.
+SYNONYMS: dict[str, str] = {
+    # --- Russian ---------------------------------------------------------
+    "глаз": "eye", "глаза": "eye", "зрачок": "eye pupil", "радужка": "eye iris",
+    "белок": "eye white", "веко": "eyelid", "ресницы": "eyelash",
+    "ресница": "eyelash", "блик": "light", "тень": "shadow",
+    "бровь": "eyebrow", "брови": "eyebrow", "рот": "mouth", "губы": "lip",
+    "губа": "lip", "зубы": "teeth", "язык": "tongue", "нос": "nose",
+    "румяна": "blush", "щека": "cheek", "щеки": "cheek",
+    "волосы": "hair", "чёлка": "front hair", "челка": "front hair",
+    "хвост": "tail", "ухо": "ear", "уши": "ear", "ушко": "ear",
+    "рог": "horn", "рога": "horn",
+    "лицо": "face", "голова": "head", "шея": "neck", "тело": "body",
+    "основа": "body", "торс": "body", "грудь": "chest",
+    "рука": "arm", "руки": "arm", "ладонь": "hand", "кисть": "hand",
+    "нога": "leg", "ноги": "leg", "юбка": "skirt", "платье": "dress",
+    "бант": "ribbon", "лента": "ribbon", "воротник": "collar",
+    "левый": "left", "левая": "left", "лев": "left",
+    "правый": "right", "правая": "right", "прав": "right",
+    "центр": "center",
+    # Single-letter side tokens: 'л'/'п' are the Russian equivalents of L/R
+    # ('ухо п' = right ear). 'д' appears as a typo for 'л' in real files.
+    "л": "left", "д": "left", "п": "right", "ц": "center",
+}
+
+_SYN_RE = re.compile(
+    r"(?<![^\W\d_])(?:%s)(?![^\W\d_])"
+    % "|".join(re.escape(k) for k in sorted(SYNONYMS, key=len, reverse=True))
+)
 
 
 def normalize(name: str) -> str:
@@ -85,9 +125,11 @@ def normalize(name: str) -> str:
     \\b-anchored rule silently fails on numbered layers — and numbered layers
     are everywhere in real PSDs ('Front Hair L1', 'Eye L Eyelid2').
     Separators are normalized too, so 'Eye:: Left' and 'eye_left' both work.
+    Non-English terms are translated via SYNONYMS so the rules see English.
     """
     s = re.sub(r"([a-z])(\d)", r"\1 \2", name.lower())
-    return re.sub(r"\s+", " ", re.sub(r"[:_\-/]+", " ", s)).strip()
+    s = re.sub(r"\s+", " ", re.sub(r"[:_\-/]+", " ", s)).strip()
+    return _SYN_RE.sub(lambda m: SYNONYMS[m.group(0)], s)
 
 
 def detect_side(name: str) -> str | None:
